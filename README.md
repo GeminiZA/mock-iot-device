@@ -11,6 +11,16 @@ Publishes to the topic: `assets/:id` where `id` is a uint from 1 to the max spec
 }
 ```
 
+Subscribes to the same topic to receive commands in the form:
+
+```
+{
+    "command": string
+}
+```
+
+Where `command: "stop"` stops the device from publishing data and `command: "start"` resumes data publication
+
 ### Usage
 
 - clone the repo
