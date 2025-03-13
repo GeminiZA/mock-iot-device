@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -20,6 +22,8 @@ import (
 )
 
 type config struct {
+	APIIP            string
+	APIPort          string
 	MQTTBrokerIp     string
 	MQTTBrokerPort   string
 	MQTTUsername     string
@@ -37,11 +41,32 @@ func loadConfig() (*config, error) {
 	if err != nil {
 		return nil, err
 	}
+	apiHost := os.Getenv("API_HOST")
+	if apiHost == "" {
+		return nil, fmt.Errorf("missing API_HOST in env")
+	}
+	ip := net.ParseIP(apiHost)
+	apiIp := ""
+	if ip == nil {
+		ips, err := net.LookupIP(apiHost)
+		if err != nil {
+			return nil, fmt.Errorf("unable to resolve MQTT_BROKER_HOST ip, %v, %s", err, apiHost)
+		}
+		if len(ips) > 0 {
+			apiIp = ips[0].String()
+		}
+	} else {
+		apiIp = ip.String()
+	}
+	apiPort := os.Getenv("API_PORT")
+	if apiPort == "" {
+		return nil, fmt.Errorf("missing API_PORT in env")
+	}
 	mqttBrokerHost := os.Getenv("MQTT_BROKER_HOST")
 	if mqttBrokerHost == "" {
 		return nil, fmt.Errorf("missing MQTT_BROKER_HOST in env")
 	}
-	ip := net.ParseIP(mqttBrokerHost)
+	ip = net.ParseIP(mqttBrokerHost)
 	mqttBrokerIp := ""
 	if ip == nil {
 		ips, err := net.LookupIP(mqttBrokerHost)
@@ -89,6 +114,8 @@ func loadConfig() (*config, error) {
 	rndSrc := rand.NewSource(randomSeed)
 	rnd := rand.New(rndSrc)
 	return &config{
+		APIIP:            apiIp,
+		APIPort:          apiPort,
 		MQTTBrokerIp:     mqttBrokerIp,
 		MQTTBrokerPort:   mqttBrokerPort,
 		MQTTUsername:     mqttUsername,
@@ -117,6 +144,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	cfg.addDevices()
 	logMsg(fmt.Sprintf("Starting %d devices with seed: %d...\n", cfg.NumDevices, cfg.RandomSeed), 0)
 	for i := 1; i < cfg.NumDevices+1; i++ {
 		cfg.Wg.Add(1)
@@ -125,6 +153,49 @@ func main() {
 	}
 	cfg.Wg.Wait()
 	logMsg("All devices done", 0)
+}
+
+func (cfg *config) addDevice(client *http.Client, id uint, name string) error {
+	logMsg(fmt.Sprintf("Adding device %d name: %s to api", id, name), 0)
+	jsonStruct := struct {
+		Id   uint   `json:"id"`
+		Name string `json:"name"`
+	}{
+		Id:   id,
+		Name: name,
+	}
+	jsonData, err := json.Marshal(jsonStruct)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("POST", fmt.Sprintf("http://%s:%s/assets", cfg.APIIP, cfg.APIPort), bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("received non-201 response: %d", resp.StatusCode)
+	}
+	logMsg(fmt.Sprintf("Successfully added device to api: %d", id), 0)
+	return nil
+}
+
+func (cfg *config) addDevices() {
+	client := &http.Client{
+		Timeout: time.Second,
+	}
+	for i := 1; i < cfg.NumDevices+1; i++ {
+		err := cfg.addDevice(client, uint(i), fmt.Sprintf("test_device_%d", i))
+		if err != nil {
+			logMsg(fmt.Sprintf("Error added device (%d) to api: %v", i, err), 0)
+		}
+	}
 }
 
 func (cfg *config) runDevice(id uint, duration time.Duration) {
@@ -170,8 +241,7 @@ func (cfg *config) runDevice(id uint, duration time.Duration) {
 			Status: "online",
 			Telemetry: map[string]interface{}{
 				"humidity":    cfg.GetRandUInt(20, 100),
-				"temperature": cfg.GetRandUInt(0, 40) - 10,
-				"time":        time.Now().String(),
+				"temperature": int(cfg.GetRandUInt(0, 40)) - 10,
 			},
 		}
 		// sink values instead of waiting

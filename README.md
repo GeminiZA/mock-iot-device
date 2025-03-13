@@ -6,7 +6,6 @@ Publishes to the topic: `assets/:id` where `id` is a uint from 1 to the max spec
 
 ```
 {
-    "time": string #time in the form: "2006-01-02 15:04:05.999999999 -0700 MST"
     "telemetry": json object # any data
     "status": string #status string, just "online"
 }
